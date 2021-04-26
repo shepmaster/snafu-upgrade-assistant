@@ -1,0 +1,14 @@
+[package]
+name = "snafu-upgrade-assistant"
+version = "0.1.0"
+# Note that this data is duplicated in the help text
+description = "Helps upgrade SNAFU between semver-incompatible versions"
+
+authors = ["Jake Goulding <jake.goulding@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+argh = { version = "0.1.4", default-features = false }
+itertools = { version = "0.10.0", default-features = false }
+serde = { version = "1.0.125", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.64", default-features = false, features = ["std"] }
