@@ -2,7 +2,7 @@ use argh::FromArgs;
 use itertools::Itertools;
 use serde::Deserialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Path, PathBuf},
     process::{self, Command},
@@ -40,11 +40,12 @@ impl Code {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 struct Span {
-    byte_end: usize,
     byte_start: usize,
+    byte_end: usize,
     file_name: String,
+    is_primary: bool,
 }
 
 /// Helps upgrade SNAFU between semver-incompatible versions
@@ -87,6 +88,10 @@ fn main() -> Result<()> {
 
     let mut depth = 0;
     let mut last_fix = apply_once(&opts)?;
+
+    if opts.dry_run {
+        return Ok(());
+    }
 
     loop {
         if last_fix.is_empty() {
@@ -133,7 +138,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
 
     // dbg!(&lines);
 
-    let relevant_spans: Vec<_> = lines
+    let relevant_spans: BTreeSet<_> = lines
         .iter()
         .flat_map(|l| match l {
             Line::CompilerMessage { message } => Some(message),
@@ -141,6 +146,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         })
         .filter(|m| m.code.as_ref().map_or(false, Code::is_relevant))
         .flat_map(|m| &m.spans)
+        .filter(|s| s.is_primary)
         .collect();
 
     // dbg!(&relevant_spans);
@@ -151,6 +157,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             byte_end,
             byte_start,
             ref file_name,
+            is_primary: _,
         } = *span;
         file_mapping
             .entry(file_name.to_owned())
@@ -178,13 +185,13 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
 
         let mut pieces = Vec::new();
 
-        spans.sort_unstable();
         for (_start, end) in spans.iter().copied().rev() {
             let (head, tail) = content.split_at(end);
 
             // dbg!(&head[head.len() - 10..]);
             // dbg!(&tail[..10]);
 
+            // Assume we've already applied the suffix and avoid adding it again
             if head.ends_with(&opts.suffix) {
                 continue;
             }
