@@ -33,7 +33,7 @@ struct Code {
 }
 
 impl Code {
-    const ERROR_CODES: &'static [&'static str] = &["E0422", "E0423", "E0425", "E0432"];
+    const ERROR_CODES: &'static [&'static str] = &["E0412", "E0422", "E0423", "E0425", "E0432"];
 
     fn is_relevant(&self) -> bool {
         Self::ERROR_CODES.iter().any(|&c| c == self.code)
