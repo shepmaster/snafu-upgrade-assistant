@@ -60,6 +60,11 @@ struct Opts {
     #[argh(switch)]
     dry_run: bool,
 
+    /// extra arguments to `cargo check`. The option may be used
+    /// multiple times.
+    #[argh(option)]
+    extra_check_arg: Vec<String>,
+
     /// what context selector suffix to use. Defaults to "Snafu"
     #[argh(option, default = "Self::DEFAULT_SUFFIX.to_string()")]
     suffix: String,
@@ -124,10 +129,12 @@ fn main() -> Result<()> {
 type FileMapping = BTreeMap<String, Vec<(usize, usize)>>;
 
 fn apply_once(opts: &Opts) -> Result<FileMapping> {
-    let output = Command::new("cargo")
-        .arg("build")
-        .args(&["--message-format", "json"])
-        .output()?;
+    let mut build_command = Command::new("cargo");
+    build_command.arg("check");
+    for arg in &opts.extra_check_arg {
+        build_command.arg(arg);
+    }
+    let output = build_command.args(&["--message-format", "json"]).output()?;
     let stdout = String::from_utf8(output.stdout)?;
 
     // dbg!(&stdout);
