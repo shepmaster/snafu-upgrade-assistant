@@ -60,7 +60,7 @@ struct Opts {
     #[argh(switch)]
     dry_run: bool,
 
-    /// what context selector suffix to use. Defaults to "Context"
+    /// what context selector suffix to use. Defaults to "Snafu"
     #[argh(option, default = "Self::DEFAULT_SUFFIX.to_string()")]
     suffix: String,
 
@@ -75,7 +75,7 @@ struct Opts {
 }
 
 impl Opts {
-    const DEFAULT_SUFFIX: &'static str = "Context";
+    const DEFAULT_SUFFIX: &'static str = "Snafu";
     const DEFAULT_MAXIMUM_ITERATIONS: usize = 5;
 }
 
