@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{self, Command},
 };
 
@@ -175,8 +175,10 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
 
     // dbg!(&file_mapping);
 
+    let current_dir = env::current_dir()?;
+
     for (filename, spans) in &mut file_mapping {
-        let filename = Path::new(filename);
+        let filename = current_dir.join(filename);
         if !filename.starts_with(&opts.directory) {
             return Err(format!(
                 "Attempted to update file outside of safe directory. {} is not within {}",
@@ -188,7 +190,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
 
         // dbg!(filename);
 
-        let content = fs::read_to_string(filename)?;
+        let content = fs::read_to_string(&filename)?;
         let mut content: &str = &content;
 
         let mut pieces = Vec::new();
@@ -220,7 +222,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         if opts.dry_run {
             eprintln!("Would write modified content to '{}'", filename.display());
         } else {
-            fs::write(filename, modified_content)?;
+            fs::write(&filename, modified_content)?;
         }
     }
 
