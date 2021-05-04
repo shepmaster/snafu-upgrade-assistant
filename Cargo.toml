@@ -7,6 +7,9 @@ description = "Helps upgrade SNAFU between semver-incompatible versions"
 authors = ["Jake Goulding <jake.goulding@gmail.com>"]
 edition = "2018"
 
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/shepmaster/snafu-upgrade-assistant"
+
 [dependencies]
 argh = { version = "0.1.4", default-features = false }
 itertools = { version = "0.10.0", default-features = false }
