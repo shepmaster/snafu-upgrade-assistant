@@ -96,6 +96,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    eprintln!("Performing initial check build; this may take a while");
+
     let mut depth = 0;
     let mut last_fix = apply_once(&opts)?;
 
@@ -120,6 +122,7 @@ fn main() -> Result<()> {
             process::exit(1);
         }
 
+        eprintln!("Performing follow-up check build");
         let current_fix = apply_once(&opts)?;
 
         if last_fix == current_fix {
