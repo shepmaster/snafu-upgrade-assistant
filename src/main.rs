@@ -77,6 +77,10 @@ struct Opts {
     /// how many iterations to perform before giving up
     #[argh(option, default = "Self::DEFAULT_MAXIMUM_ITERATIONS")]
     max_iterations: usize,
+
+    /// show detailed information
+    #[argh(switch)]
+    verbose: bool,
 }
 
 impl Opts {
@@ -100,6 +104,10 @@ fn main() -> Result<()> {
     }
 
     loop {
+        if opts.verbose {
+            dbg!(depth);
+        }
+
         if last_fix.is_empty() {
             break;
         }
@@ -134,17 +142,27 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
     for arg in &opts.extra_check_arg {
         build_command.arg(arg);
     }
-    let output = build_command.args(&["--message-format", "json"]).output()?;
+    build_command.args(&["--message-format", "json"]);
+
+    if opts.verbose {
+        dbg!(&build_command);
+    }
+
+    let output = build_command.output()?;
     let stdout = String::from_utf8(output.stdout)?;
 
-    // dbg!(&stdout);
+    if opts.verbose {
+        dbg!(&stdout);
+    }
 
     let lines: Vec<Line> = stdout
         .lines()
         .map(|l| serde_json::from_str(l))
         .collect::<Result<_, _>>()?;
 
-    // dbg!(&lines);
+    if opts.verbose {
+        dbg!(&lines);
+    }
 
     let relevant_spans: BTreeSet<_> = lines
         .iter()
@@ -157,7 +175,9 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         .filter(|s| s.is_primary)
         .collect();
 
-    // dbg!(&relevant_spans);
+    if opts.verbose {
+        dbg!(&relevant_spans);
+    }
 
     let mut file_mapping: FileMapping = BTreeMap::new();
     for &span in &relevant_spans {
@@ -173,7 +193,9 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             .push((byte_start, byte_end));
     }
 
-    // dbg!(&file_mapping);
+    if opts.verbose {
+        dbg!(&file_mapping);
+    }
 
     let current_dir = env::current_dir()?;
 
@@ -188,7 +210,9 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             .into());
         }
 
-        // dbg!(filename);
+        if opts.verbose {
+            dbg!(&filename);
+        }
 
         let content = fs::read_to_string(&filename)?;
         let mut content: &str = &content;
@@ -198,8 +222,10 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         for (_start, end) in spans.iter().copied().rev() {
             let (head, tail) = content.split_at(end);
 
-            // dbg!(&head[head.len() - 10..]);
-            // dbg!(&tail[..10]);
+            if opts.verbose {
+                dbg!(&head[head.len() - 10..]);
+                dbg!(&tail[..10]);
+            }
 
             // Assume we've already applied the suffix and avoid adding it again
             if head.ends_with(&opts.suffix) {
@@ -213,11 +239,16 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         }
         pieces.push(content);
 
-        // dbg!(spans.len(), pieces.len());
+        if opts.verbose {
+            dbg!(spans.len(), pieces.len());
+        }
 
         let modified_content: String =
             Itertools::intersperse(pieces.iter().copied().rev(), &opts.suffix).collect();
-        // dbg!(&modified_content);
+
+        if opts.verbose {
+            dbg!(&modified_content);
+        }
 
         if opts.dry_run {
             eprintln!("Would write modified content to '{}'", filename.display());
