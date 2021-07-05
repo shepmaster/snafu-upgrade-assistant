@@ -18,6 +18,8 @@ Upgrades usages of [SNAFU][] 0.6 to 0.7.
     snafu-upgrade-assistant
     ```
 
+    This should compile successfully and make no changes to your files.
+
 1. Update SNAFU from 0.6 to 0.7 in your Cargo.toml
 
 1. Run the assistant again
