@@ -1,0 +1,14 @@
+use snafu::{Snafu, ResultExt};
+
+#[derive(Debug, Snafu)]
+struct Inner;
+
+#[derive(Debug, Snafu)]
+enum Error {
+    Variant1 { source: Inner },
+}
+
+fn main() {
+    let inner = InnerSnafu.fail::<()>();
+    let _ = inner.with_context(|_| Variant1Snafu);
+}

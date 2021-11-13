@@ -1,5 +1,4 @@
 use argh::FromArgs;
-use itertools::Itertools;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -33,11 +32,95 @@ struct Code {
 }
 
 impl Code {
-    const ERROR_CODES: &'static [&'static str] =
-        &["E0412", "E0422", "E0423", "E0425", "E0432", "E0574"];
+    fn is_context_selector_rename(&self) -> bool {
+        let error_codes = &["E0412", "E0422", "E0423", "E0425", "E0432", "E0574"];
 
-    fn is_relevant(&self) -> bool {
-        Self::ERROR_CODES.iter().any(|&c| c == self.code)
+        error_codes.iter().any(|&c| c == self.code)
+    }
+
+    fn is_with_context_argument(&self) -> bool {
+        let error_codes = &["E0593"];
+        error_codes.iter().any(|&c| c == self.code)
+    }
+
+    fn categorize<T>(&self, v: T) -> Option<Category<T>> {
+        if self.is_context_selector_rename() {
+            Some(Category::ContextSelectorRename(v))
+        } else if self.is_with_context_argument() {
+            Some(Category::WithContextArgument(v))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Category<T> {
+    ContextSelectorRename(T),
+    WithContextArgument(T),
+}
+
+impl<T> Category<T> {
+    fn as_ref(&self) -> Category<&T> {
+        use Category::*;
+
+        match self {
+            ContextSelectorRename(v) => ContextSelectorRename(v),
+            WithContextArgument(v) => WithContextArgument(v),
+        }
+    }
+
+    fn unify(self) -> T {
+        use Category::*;
+
+        match self {
+            ContextSelectorRename(v) => v,
+            WithContextArgument(v) => v,
+        }
+    }
+
+    fn map<U>(self, f: impl FnOnce(T) -> U) -> Category<U> {
+        use Category::*;
+
+        match self {
+            ContextSelectorRename(v) => ContextSelectorRename(f(v)),
+            WithContextArgument(v) => WithContextArgument(f(v)),
+        }
+    }
+}
+
+impl<T> IntoIterator for Category<T>
+where
+    T: IntoIterator,
+{
+    type Item = Category<T::Item>;
+    type IntoIter = std::iter::Map<T::IntoIter, fn(T::Item) -> Category<T::Item>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        use Category::*;
+
+        match self {
+            ContextSelectorRename(v) => v.into_iter().map(ContextSelectorRename),
+            WithContextArgument(v) => v.into_iter().map(WithContextArgument),
+        }
+    }
+}
+
+impl<T> PartialOrd for Category<T>
+where
+    T: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_ref().unify().partial_cmp(other.as_ref().unify())
+    }
+}
+
+impl<T> Ord for Category<T>
+where
+    T: Ord,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_ref().unify().cmp(other.as_ref().unify())
     }
 }
 
@@ -137,7 +220,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-type FileMapping = BTreeMap<String, Vec<(usize, usize)>>;
+type FileMapping = BTreeMap<String, Vec<Category<(usize, usize)>>>;
 
 fn apply_once(opts: &Opts) -> Result<FileMapping> {
     let mut build_command = Command::new("cargo");
@@ -173,9 +256,13 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             Line::CompilerMessage { message } => Some(message),
             Line::Other => None,
         })
-        .filter(|m| m.code.as_ref().map_or(false, Code::is_relevant))
-        .flat_map(|m| &m.spans)
-        .filter(|s| s.is_primary)
+        .flat_map(|m| m.code.as_ref().and_then(|c| c.categorize(m)))
+        .flat_map(|c| c.map(|m| &m.spans))
+        .filter(|c| match c {
+            Category::ContextSelectorRename(v) => v.is_primary,
+            // The secondary error message points to the closure argument
+            Category::WithContextArgument(v) => !v.is_primary,
+        })
         .collect();
 
     if opts.verbose {
@@ -184,16 +271,12 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
 
     let mut file_mapping: FileMapping = BTreeMap::new();
     for &span in &relevant_spans {
-        let Span {
-            byte_end,
-            byte_start,
-            ref file_name,
-            is_primary: _,
-        } = *span;
+        let file_name = &span.as_ref().unify().file_name;
+        let range = span.as_ref().map(|s| (s.byte_start, s.byte_end));
         file_mapping
             .entry(file_name.to_owned())
             .or_default()
-            .push((byte_start, byte_end));
+            .push(range);
     }
 
     if opts.verbose {
@@ -220,26 +303,46 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         let content = fs::read_to_string(&filename)?;
         let mut content: &str = &content;
 
-        let mut pieces = Vec::new();
+        let mut pieces: Vec<&str> = Vec::new();
 
-        for (_start, end) in spans.iter().copied().rev() {
-            let (head, tail) = content.split_at(end);
+        for cat in spans.iter().copied().rev() {
+            match cat {
+                Category::ContextSelectorRename((_start, end)) => {
+                    let (head, tail) = content.split_at(end);
 
-            if opts.verbose {
-                dbg!(&head[head.len() - 10..]);
-                dbg!(&tail[..10]);
+                    if opts.verbose {
+                        dbg!(&head[head.len() - 10..]);
+                        dbg!(&tail[..10]);
+                    }
+
+                    // Assume we've already applied the suffix and avoid adding it again
+                    if head.ends_with(&opts.suffix) {
+                        continue;
+                    }
+
+                    let head = head.strip_suffix("Error").unwrap_or(head);
+                    let head = head.strip_suffix("Context").unwrap_or(head);
+
+                    pieces.push(tail);
+                    pieces.push(&opts.suffix);
+                    content = head;
+                }
+                Category::WithContextArgument((_start, end)) => {
+                    // The range points to the `||` in the closure
+                    // arguments, so we offset by one to get into the
+                    // middle
+                    let (head, tail) = content.split_at(end - 1);
+
+                    if opts.verbose {
+                        dbg!(&head[head.len() - 10..]);
+                        dbg!(&tail[..10]);
+                    }
+
+                    pieces.push(tail);
+                    pieces.push("_");
+                    content = head;
+                }
             }
-
-            // Assume we've already applied the suffix and avoid adding it again
-            if head.ends_with(&opts.suffix) {
-                continue;
-            }
-
-            let head = head.strip_suffix("Error").unwrap_or(head);
-            let head = head.strip_suffix("Context").unwrap_or(head);
-
-            pieces.push(tail);
-            content = head;
         }
         pieces.push(content);
 
@@ -247,8 +350,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             dbg!(spans.len(), pieces.len());
         }
 
-        let modified_content: String =
-            Itertools::intersperse(pieces.iter().copied().rev(), &opts.suffix).collect();
+        let modified_content: String = pieces.iter().copied().rev().collect();
 
         if opts.verbose {
             dbg!(&modified_content);
