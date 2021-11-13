@@ -236,6 +236,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             }
 
             let head = head.strip_suffix("Error").unwrap_or(head);
+            let head = head.strip_suffix("Context").unwrap_or(head);
 
             pieces.push(tail);
             content = head;
