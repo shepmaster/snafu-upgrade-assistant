@@ -1,6 +1,9 @@
 use argh::FromArgs;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::Deserialize;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::PathBuf,
@@ -26,6 +29,40 @@ struct Message {
     spans: Vec<Span>,
 }
 
+impl Message {
+    fn categorize<T>(&self, v: T) -> Option<Category<T>> {
+        match &self.code {
+            Some(code) => {
+                if code.is_context_selector_rename() {
+                    Some(Category::ContextSelectorRename(v))
+                } else if code.is_with_context_argument() {
+                    Some(Category::WithContextArgument(v))
+                } else {
+                    None
+                }
+            }
+            None => {
+                if self.is_attribute_equal() {
+                    Some(Category::EqualSyntax(v))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn is_attribute_equal(&self) -> bool {
+        static LOOKS_LIKE_ATTRIBUTE_ERROR: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r#"snafu\(.*="#).unwrap());
+
+        self.spans.iter().any(|s| {
+            s.text
+                .iter()
+                .any(|t| LOOKS_LIKE_ATTRIBUTE_ERROR.is_match(&t.text))
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Code {
     code: String,
@@ -42,22 +79,13 @@ impl Code {
         let error_codes = &["E0593"];
         error_codes.iter().any(|&c| c == self.code)
     }
-
-    fn categorize<T>(&self, v: T) -> Option<Category<T>> {
-        if self.is_context_selector_rename() {
-            Some(Category::ContextSelectorRename(v))
-        } else if self.is_with_context_argument() {
-            Some(Category::WithContextArgument(v))
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Category<T> {
     ContextSelectorRename(T),
     WithContextArgument(T),
+    EqualSyntax(T),
 }
 
 impl<T> Category<T> {
@@ -67,6 +95,7 @@ impl<T> Category<T> {
         match self {
             ContextSelectorRename(v) => ContextSelectorRename(v),
             WithContextArgument(v) => WithContextArgument(v),
+            EqualSyntax(v) => EqualSyntax(v),
         }
     }
 
@@ -76,6 +105,7 @@ impl<T> Category<T> {
         match self {
             ContextSelectorRename(v) => v,
             WithContextArgument(v) => v,
+            EqualSyntax(v) => v,
         }
     }
 
@@ -85,6 +115,7 @@ impl<T> Category<T> {
         match self {
             ContextSelectorRename(v) => ContextSelectorRename(f(v)),
             WithContextArgument(v) => WithContextArgument(f(v)),
+            EqualSyntax(v) => EqualSyntax(f(v)),
         }
     }
 }
@@ -102,6 +133,7 @@ where
         match self {
             ContextSelectorRename(v) => v.into_iter().map(ContextSelectorRename),
             WithContextArgument(v) => v.into_iter().map(WithContextArgument),
+            EqualSyntax(v) => v.into_iter().map(EqualSyntax),
         }
     }
 }
@@ -130,6 +162,12 @@ struct Span {
     byte_end: usize,
     file_name: String,
     is_primary: bool,
+    text: Vec<Text>,
+}
+
+#[derive(Debug, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
+struct Text {
+    text: String,
 }
 
 /// Helps upgrade SNAFU between semver-incompatible versions
@@ -256,12 +294,13 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
             Line::CompilerMessage { message } => Some(message),
             Line::Other => None,
         })
-        .flat_map(|m| m.code.as_ref().and_then(|c| c.categorize(m)))
+        .flat_map(|m| m.categorize(m))
         .flat_map(|c| c.map(|m| &m.spans))
         .filter(|c| match c {
             Category::ContextSelectorRename(v) => v.is_primary,
             // The secondary error message points to the closure argument
             Category::WithContextArgument(v) => !v.is_primary,
+            Category::EqualSyntax(v) => v.is_primary,
         })
         .collect();
 
@@ -303,7 +342,7 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         let content = fs::read_to_string(&filename)?;
         let mut content: &str = &content;
 
-        let mut pieces: Vec<&str> = Vec::new();
+        let mut pieces: Vec<Cow<str>> = Vec::new();
 
         for cat in spans.iter().copied().rev() {
             match cat {
@@ -323,8 +362,8 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
                     let head = head.strip_suffix("Error").unwrap_or(head);
                     let head = head.strip_suffix("Context").unwrap_or(head);
 
-                    pieces.push(tail);
-                    pieces.push(&opts.suffix);
+                    pieces.push(Cow::Borrowed(tail));
+                    pieces.push(Cow::Borrowed(&opts.suffix));
                     content = head;
                 }
                 Category::WithContextArgument((_start, end)) => {
@@ -338,19 +377,35 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
                         dbg!(&tail[..10]);
                     }
 
-                    pieces.push(tail);
-                    pieces.push("_");
+                    pieces.push(Cow::Borrowed(tail));
+                    pieces.push(Cow::Borrowed("_"));
+                    content = head;
+                }
+                Category::EqualSyntax((start, _end)) => {
+                    let (head, _tail) = content.split_at(start);
+                    // Skim backwards to find spaces
+                    let (head, tail) = content.split_at(head.trim_end().len());
+
+                    static REWRITE_EQUAL_ATTRIBUTE: Lazy<Regex> =
+                        Lazy::new(|| Regex::new(r#"\s*=\s*"([^"]+)""#).unwrap());
+
+                    let attribute = REWRITE_EQUAL_ATTRIBUTE
+                        .replace(tail, |cap: &regex::Captures| {
+                            format!(r#"({})"#, cap.get(1).unwrap().as_str())
+                        });
+
+                    pieces.push(attribute);
                     content = head;
                 }
             }
         }
-        pieces.push(content);
+        pieces.push(Cow::Borrowed(content));
 
         if opts.verbose {
             dbg!(spans.len(), pieces.len());
         }
 
-        let modified_content: String = pieces.iter().copied().rev().collect();
+        let modified_content: String = pieces.into_iter().rev().collect();
 
         if opts.verbose {
             dbg!(&modified_content);
