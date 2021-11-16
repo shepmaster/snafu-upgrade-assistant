@@ -69,9 +69,9 @@ struct Opts {
     #[argh(option, default = "Self::DEFAULT_SUFFIX.to_string()")]
     suffix: String,
 
-    /// what directory to make changes in. Defaults to the current
-    /// directory
-    #[argh(option, default = "env::current_dir().unwrap()")]
+    /// what directory to make changes in. Defaults to the workspace
+    /// root
+    #[argh(option, default = "workspace_root().unwrap()")]
     directory: PathBuf,
 
     /// how many iterations to perform before giving up
@@ -200,10 +200,10 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
         dbg!(&file_mapping);
     }
 
-    let current_dir = env::current_dir()?;
+    let workspace_root = workspace_root()?;
 
     for (filename, spans) in &mut file_mapping {
-        let filename = current_dir.join(filename);
+        let filename = workspace_root.join(filename);
         if !filename.starts_with(&opts.directory) {
             return Err(format!(
                 "Attempted to update file outside of safe directory. {} is not within {}",
@@ -261,4 +261,18 @@ fn apply_once(opts: &Opts) -> Result<FileMapping> {
     }
 
     Ok(file_mapping)
+}
+
+fn workspace_root() -> Result<PathBuf> {
+    let output = Command::new("cargo")
+        .args(&["metadata", "--format-version", "1"])
+        .output()?;
+    let metadata: Metadata = serde_json::from_slice(&output.stdout)?;
+
+    Ok(metadata.workspace_root.into())
+}
+
+#[derive(Debug, Deserialize)]
+struct Metadata {
+    workspace_root: String,
 }
