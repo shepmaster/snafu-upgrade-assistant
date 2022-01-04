@@ -1,6 +1,6 @@
 [package]
 name = "snafu-upgrade-assistant"
-version = "0.1.0"
+version = "1.0.0"
 # Note that this data is duplicated in the help text
 description = "Helps upgrade SNAFU between semver-incompatible versions"
 
